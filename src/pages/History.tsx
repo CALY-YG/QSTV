@@ -405,8 +405,8 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'center',
     border: 'none',
     cursor: 'pointer',
-    opacity: 0,
-    transition: 'opacity 0.2s ease',
+    opacity: 0.6,
+    transition: 'all 0.2s ease',
   },
   cardContent: {
     padding: '16px 4px 8px',

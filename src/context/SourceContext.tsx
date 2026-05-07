@@ -21,8 +21,14 @@ export const SourceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const availableSources = useMemo(() => {
     if (user) {
-      return SOURCES;
+      // 只有 qishuo 账户能看到 'x' 资源站
+      if (user.username === 'qishuo') {
+        return SOURCES;
+      }
+      // 其他已登录用户看到除 'x' 以外的所有资源站
+      return SOURCES.filter(s => s.key !== 'x');
     }
+    // 未登录用户只能看到 'dytt'
     return SOURCES.filter(s => s.key === 'dytt');
   }, [user]);
 
