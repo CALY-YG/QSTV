@@ -42,7 +42,7 @@ const setLocalHistory = (list: HistoryItem[]) => {
 export const addHistory = (item: HistoryItem): void => {
   const list = getHistory();
   const filtered = list.filter(
-    h => !(h.vodId === item.vodId && h.sourceKey === item.sourceKey)
+    h => !(String(h.vodId) === String(item.vodId) && h.sourceKey === item.sourceKey)
   );
   const newItem = { ...item, watchedAt: Date.now() };
   filtered.unshift(newItem);
@@ -58,13 +58,13 @@ export const addHistory = (item: HistoryItem): void => {
 
 export const getHistoryForVideo = (vodId: number, sourceKey: string): HistoryItem | null => {
   const list = getHistory();
-  return list.find(h => h.vodId === vodId && h.sourceKey === sourceKey) || null;
+  return list.find(h => String(h.vodId) === String(vodId) && h.sourceKey === sourceKey) || null;
 };
 
 export const removeHistory = (vodId: number, sourceKey: string): void => {
   const list = getHistory();
   const filtered = list.filter(
-    h => !(h.vodId === vodId && h.sourceKey === sourceKey)
+    h => !(String(h.vodId) === String(vodId) && h.sourceKey === sourceKey)
   );
   setLocalHistory(filtered);
 

@@ -105,11 +105,16 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
           };
         }
       }
-      const hls = new Hls({ maxMaxBufferLength: 60, pLoader: CPL as any });
+      const hls = new Hls({ 
+        maxMaxBufferLength: 60, 
+        pLoader: CPL as any,
+        startPosition: seekTarget > 0 ? seekTarget : -1
+      });
       hlsRef.current = hls; hls.loadSource(url); hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(()=>{}); });
-      hls.on(Hls.Events.FRAG_BUFFERED, () => { if(!hasSeeked&&seekTarget>0) doSeek(); });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = url; }
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) { 
+      video.src = url; 
+    }
 
     video.addEventListener('canplay', doSeek);
     video.addEventListener('timeupdate', onTU);
