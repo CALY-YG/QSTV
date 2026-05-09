@@ -152,10 +152,71 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setShowVolume(true);
     if (volHideRef.current) clearTimeout(volHideRef.current);
   };
-  const hideVolSlider = () => {
-    volHideRef.current = setTimeout(() => setShowVolume(false), 300);
+  const hideVolSlider = (delayOrEvent?: number | React.MouseEvent) => {
+    const delay = typeof delayOrEvent === 'number' ? delayOrEvent : 300;
+    volHideRef.current = setTimeout(() => setShowVolume(false), delay);
   };
   const toggleFS = () => { const c=containerRef.current; if(!c)return; document.fullscreenElement?document.exitFullscreen().catch(()=>{}):c.requestFullscreen().catch(()=>{}); };
+
+  // Keyboard controls
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if user is typing in an input field
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
+      
+      const v = videoRef.current;
+      const c = containerRef.current;
+      if (!v || !c) return;
+
+      switch (e.key) {
+        case ' ':
+        case 'k':
+        case 'K':
+          e.preventDefault();
+          v.paused ? v.play().catch(()=>{}) : v.pause();
+          revealUI();
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          v.currentTime = Math.max(0, v.currentTime - 10);
+          revealUI();
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          v.currentTime = Math.min(v.duration || 0, v.currentTime + 10);
+          revealUI();
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          const volUp = Math.min(1, v.volume + 0.1);
+          v.volume = volUp;
+          setVolume(volUp);
+          if (volUp > 0) { v.muted = false; setMuted(false); }
+          showVolSlider();
+          hideVolSlider(1500);
+          revealUI();
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          const volDown = Math.max(0, v.volume - 0.1);
+          v.volume = volDown;
+          setVolume(volDown);
+          if (volDown === 0) { v.muted = true; setMuted(true); }
+          showVolSlider();
+          hideVolSlider(1500);
+          revealUI();
+          break;
+        case 'f':
+        case 'F':
+          e.preventDefault();
+          document.fullscreenElement ? document.exitFullscreen().catch(()=>{}) : c.requestFullscreen().catch(()=>{});
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [revealUI]);
 
   const seekTo = (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
     const bar = progressRef.current; const v = videoRef.current;
