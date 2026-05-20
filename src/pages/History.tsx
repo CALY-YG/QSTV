@@ -1,12 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { getHistory, removeHistory, clearAllHistory, forceSyncWithCloud, type HistoryItem } from '../utils/history';
-import { Play, Trash2, Clock, X, RefreshCw } from 'lucide-react';
+import { getBookmarks, removeBookmark, clearAllBookmarks, forceSyncBookmarksWithCloud, type BookmarkItem } from '../utils/bookmarks';
+import { Play, Trash2, Clock, X, RefreshCw, Heart } from 'lucide-react';
 import { SOURCES } from '../api';
 import { useAuth } from '../context/AuthContext';
 
 const History: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get('tab') === 'bookmarks' ? 'bookmarks' : 'history';
+
   const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [bookmarks, setBookmarks] = useState<BookmarkItem[]>([]);
   const [syncing, setSyncing] = useState(false);
   const { user } = useAuth();
 
@@ -14,29 +19,53 @@ const History: React.FC = () => {
     setHistory(getHistory());
   };
 
+  const loadBookmarks = () => {
+    setBookmarks(getBookmarks());
+  };
+
   // On mount: load local first, then sync with cloud if logged in
   useEffect(() => {
     loadHistory();
+    loadBookmarks();
     if (user) {
       setSyncing(true);
-      forceSyncWithCloud()
-        .then(() => loadHistory())
-        .catch(console.error)
-        .finally(() => setSyncing(false));
+      Promise.all([
+        forceSyncWithCloud(),
+        forceSyncBookmarksWithCloud()
+      ]).then(() => {
+        loadHistory();
+        loadBookmarks();
+      })
+      .catch(console.error)
+      .finally(() => setSyncing(false));
     }
   }, [user]);
 
-  const handleRemove = (item: HistoryItem, e: React.MouseEvent) => {
+  const handleRemoveHistory = (item: HistoryItem, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     removeHistory(item.vodId, item.sourceKey);
     loadHistory();
   };
 
+  const handleRemoveBookmark = (item: BookmarkItem, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    removeBookmark(item.vodId, item.sourceKey);
+    loadBookmarks();
+  };
+
   const handleClearAll = () => {
-    if (window.confirm('确定要清空所有观看记录吗？')) {
-      clearAllHistory();
-      setHistory([]);
+    if (activeTab === 'history') {
+      if (window.confirm('确定要清空所有观看记录吗？')) {
+        clearAllHistory();
+        setHistory([]);
+      }
+    } else {
+      if (window.confirm('确定要清空所有收藏的影视吗？')) {
+        clearAllBookmarks();
+        setBookmarks([]);
+      }
     }
   };
 
@@ -70,13 +99,39 @@ const History: React.FC = () => {
 
   return (
     <div className="container animate-fade-in" style={styles.page}>
+      
+      {/* Tab Switch Bar */}
+      <div className="space-tab-bar">
+        <button
+          className={`space-tab ${activeTab === 'history' ? 'active' : ''}`}
+          onClick={() => setSearchParams({ tab: 'history' })}
+        >
+          观看记录
+        </button>
+        <button
+          className={`space-tab ${activeTab === 'bookmarks' ? 'active' : ''}`}
+          onClick={() => setSearchParams({ tab: 'bookmarks' })}
+        >
+          我的收藏
+        </button>
+      </div>
 
       <div style={styles.header}>
         <h1 style={styles.title}>
-          <Clock size={24} color="var(--primary)" />
-          观看记录
-          <span style={styles.count}>({history.length})</span>
-          {syncing && <span style={{ fontSize: '13px', color: 'var(--primary)', fontWeight: 400 }}>同步中...</span>}
+          {activeTab === 'history' ? (
+            <>
+              <Clock size={24} color="var(--primary)" />
+              观看记录
+              <span style={styles.count}>({history.length})</span>
+            </>
+          ) : (
+            <>
+              <Heart size={24} color="var(--primary)" fill="var(--primary)" />
+              我的收藏
+              <span style={styles.count}>({bookmarks.length})</span>
+            </>
+          )}
+          {syncing && <span style={{ fontSize: '13px', color: 'var(--primary)', fontWeight: 400, marginLeft: '10px' }}>同步中...</span>}
         </h1>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           {user && (
@@ -84,8 +139,12 @@ const History: React.FC = () => {
               style={styles.clearBtn}
               onClick={() => {
                 setSyncing(true);
-                forceSyncWithCloud()
-                  .then(() => loadHistory())
+                const syncPromise = activeTab === 'history' ? forceSyncWithCloud() : forceSyncBookmarksWithCloud();
+                syncPromise
+                  .then(() => {
+                    loadHistory();
+                    loadBookmarks();
+                  })
                   .catch(console.error)
                   .finally(() => setSyncing(false));
               }}
@@ -95,78 +154,135 @@ const History: React.FC = () => {
               云同步
             </button>
           )}
-          {history.length > 0 && (
+          {(activeTab === 'history' ? history.length : bookmarks.length) > 0 && (
             <button style={styles.clearBtn} onClick={handleClearAll}>
               <Trash2 size={16} />
-              清空记录
+              {activeTab === 'history' ? '清空历史' : '清空收藏'}
             </button>
           )}
         </div>
       </div>
 
-      {history.length === 0 ? (
-        <div style={styles.empty}>
-          <Clock size={48} color="var(--border-color)" />
-          <p>暂无观看记录</p>
-          <Link to="/" style={styles.goHomeBtn}>去看点什么</Link>
-        </div>
+      {activeTab === 'history' ? (
+        history.length === 0 ? (
+          <div style={styles.empty}>
+            <Clock size={48} color="var(--border-color)" />
+            <p>暂无观看记录</p>
+            <Link to="/" style={styles.goHomeBtn}>去看点什么</Link>
+          </div>
+        ) : (
+          <div style={styles.grid}>
+            {history.map((item) => (
+              <Link
+                to={`/play/${item.vodId}?source=${item.sourceKey}`}
+                key={`${item.vodId}-${item.sourceKey}`}
+                style={styles.card}
+                className="video-card"
+              >
+                <div style={styles.posterWrapper} className="poster-wrapper">
+                  {item.vodPic ? (
+                    <img
+                      src={item.vodPic}
+                      alt={item.vodName}
+                      style={styles.posterImg}
+                      loading="lazy"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                        (e.target as HTMLImageElement).nextElementSibling?.classList.add('show-fallback');
+                      }}
+                    />
+                  ) : null}
+                  <div style={styles.posterFallback} className={item.vodPic ? '' : 'show-fallback'}>
+                    <Play size={40} color="rgba(255,255,255,0.5)" />
+                  </div>
+                  <div style={styles.playOverlay} className="play-overlay">
+                    <Play size={48} color="#fff" />
+                  </div>
+                  {/* Resume badge */}
+                  <div style={styles.resumeBadge}>
+                    ▶ {item.episodeName}
+                    {item.playbackTime > 0 && (
+                      <span style={{ opacity: 0.85, fontWeight: 400 }}>
+                        {' · 看到 '}{formatDuration(item.playbackTime)}
+                      </span>
+                    )}
+                  </div>
+                  {/* Remove button */}
+                  <button
+                    style={styles.removeBtn}
+                    onClick={(e) => handleRemoveHistory(item, e)}
+                    title="删除记录"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <div style={styles.cardContent}>
+                  <h3 style={styles.cardTitle}>{item.vodName}</h3>
+                  <div style={styles.cardMeta}>
+                    <span style={styles.tag}>{item.typeName}</span>
+                    <span style={styles.time}>{formatTime(item.watchedAt)}</span>
+                  </div>
+                  <div style={styles.sourceName}>{getSourceName(item.sourceKey)}</div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )
       ) : (
-        <div style={styles.grid}>
-          {history.map((item) => (
-            <Link
-              to={`/play/${item.vodId}?source=${item.sourceKey}`}
-              key={`${item.vodId}-${item.sourceKey}`}
-              style={styles.card}
-              className="video-card"
-            >
-              <div style={styles.posterWrapper}>
-                {item.vodPic ? (
-                  <img
-                    src={item.vodPic}
-                    alt={item.vodName}
-                    style={styles.posterImg}
-                    loading="lazy"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).style.display = 'none';
-                      (e.target as HTMLImageElement).nextElementSibling?.classList.add('show-fallback');
-                    }}
-                  />
-                ) : null}
-                <div style={styles.posterFallback} className={item.vodPic ? '' : 'show-fallback'}>
-                  <Play size={40} color="rgba(255,255,255,0.5)" />
+        bookmarks.length === 0 ? (
+          <div style={styles.empty}>
+            <Heart size={48} color="var(--border-color)" />
+            <p>暂无收藏影视</p>
+            <Link to="/" style={styles.goHomeBtn}>去看点什么</Link>
+          </div>
+        ) : (
+          <div style={styles.grid}>
+            {bookmarks.map((item) => (
+              <Link
+                to={`/play/${item.vodId}?source=${item.sourceKey}`}
+                key={`${item.vodId}-${item.sourceKey}`}
+                style={styles.card}
+                className="video-card"
+              >
+                <div style={styles.posterWrapper} className="poster-wrapper">
+                  {item.vodPic ? (
+                    <img
+                      src={item.vodPic}
+                      alt={item.vodName}
+                      style={styles.posterImg}
+                      loading="lazy"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = 'none';
+                        (e.target as HTMLImageElement).nextElementSibling?.classList.add('show-fallback');
+                      }}
+                    />
+                  ) : null}
+                  <div style={styles.posterFallback} className={item.vodPic ? '' : 'show-fallback'}>
+                    <Play size={40} color="rgba(255,255,255,0.5)" />
+                  </div>
+                  <div style={styles.playOverlay} className="play-overlay">
+                    <Play size={48} color="#fff" />
+                  </div>
+                  {/* Remove button */}
+                  <button
+                    style={styles.removeBtn}
+                    onClick={(e) => handleRemoveBookmark(item, e)}
+                    title="移出收藏"
+                  >
+                    <X size={14} />
+                  </button>
                 </div>
-                <div style={styles.playOverlay} className="play-overlay">
-                  <Play size={48} color="#fff" />
+                <div style={styles.cardContent}>
+                  <h3 style={styles.cardTitle}>{item.vodName}</h3>
+                  <div style={styles.cardMeta}>
+                    <span style={styles.tag}>{item.typeName}</span>
+                  </div>
+                  <div style={styles.sourceName}>{getSourceName(item.sourceKey)}</div>
                 </div>
-                {/* Resume badge */}
-                <div style={styles.resumeBadge}>
-                  ▶ {item.episodeName}
-                  {item.playbackTime > 0 && (
-                    <span style={{ opacity: 0.85, fontWeight: 400 }}>
-                      {' · 看到 '}{formatDuration(item.playbackTime)}
-                    </span>
-                  )}
-                </div>
-                {/* Remove button */}
-                <button
-                  style={styles.removeBtn}
-                  onClick={(e) => handleRemove(item, e)}
-                  title="删除记录"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-              <div style={styles.cardContent}>
-                <h3 style={styles.cardTitle}>{item.vodName}</h3>
-                <div style={styles.cardMeta}>
-                  <span style={styles.tag}>{item.typeName}</span>
-                  <span style={styles.time}>{formatTime(item.watchedAt)}</span>
-                </div>
-                <div style={styles.sourceName}>{getSourceName(item.sourceKey)}</div>
-              </div>
-            </Link>
-          ))}
-        </div>
+              </Link>
+            ))}
+          </div>
+        )
       )}
     </div>
   );
@@ -176,106 +292,6 @@ const styles: Record<string, React.CSSProperties> = {
   page: {
     paddingTop: '20px',
     paddingBottom: '40px',
-  },
-  settingsPanel: {
-    padding: '24px',
-    borderRadius: '16px',
-    marginBottom: '32px',
-    backgroundColor: 'var(--card-bg)',
-  },
-  settingsHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    marginBottom: '20px',
-    borderBottom: '1px solid var(--border-color)',
-    paddingBottom: '12px',
-  },
-  userInfo: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '20px',
-    flexWrap: 'wrap',
-  },
-  userAvatar: {
-    width: '60px',
-    height: '60px',
-    borderRadius: '50%',
-    background: 'linear-gradient(135deg, var(--primary) 0%, #00d2ff 100%)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  userDetails: {
-    flex: 1,
-  },
-  logoutBtn: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    padding: '8px 16px',
-    borderRadius: '8px',
-    border: '1px solid var(--border-color)',
-    backgroundColor: 'transparent',
-    color: 'var(--text-muted)',
-    cursor: 'pointer',
-    fontSize: '14px',
-    transition: 'all 0.2s',
-  },
-  authContainer: {
-    display: 'flex',
-    gap: '40px',
-    flexWrap: 'wrap',
-  },
-  authDesc: {
-    flex: '1 1 300px',
-    backgroundColor: 'rgba(0,0,0,0.2)',
-    padding: '16px',
-    borderRadius: '12px',
-    border: '1px solid var(--border-color)',
-  },
-  authForm: {
-    flex: '1 1 300px',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '12px',
-  },
-  authTabs: {
-    display: 'flex',
-    gap: '20px',
-    marginBottom: '8px',
-  },
-  authTab: {
-    background: 'none',
-    border: 'none',
-    padding: '0 0 8px 0',
-    fontSize: '16px',
-    fontWeight: 600,
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '6px',
-    transition: 'all 0.2s',
-  },
-  authInput: {
-    padding: '12px 16px',
-    borderRadius: '8px',
-    border: '1px solid var(--border-color)',
-    backgroundColor: 'var(--bg-main)',
-    color: 'var(--text-main)',
-    fontSize: '14px',
-    outline: 'none',
-  },
-  authSubmitBtn: {
-    padding: '12px',
-    borderRadius: '8px',
-    border: 'none',
-    backgroundColor: 'var(--primary)',
-    color: '#000',
-    fontWeight: 700,
-    fontSize: '15px',
-    cursor: 'pointer',
-    marginTop: '4px',
   },
   header: {
     display: 'flex',

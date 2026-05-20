@@ -2,9 +2,10 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { fetchVideoDetail, fetchVideos, type Video } from '../api';
 import VideoPlayer from '../components/VideoPlayer';
-import { ArrowLeft, ArrowDownUp, ChevronDown, Check } from 'lucide-react';
+import { ArrowLeft, ArrowDownUp, ChevronDown, Check, Heart } from 'lucide-react';
 import { useSource } from '../context/SourceContext';
 import { addHistory, getHistoryForVideo } from '../utils/history';
+import { isBookmarked, addBookmark, removeBookmark } from '../utils/bookmarks';
 
 interface Episode {
   name: string;
@@ -24,9 +25,13 @@ const Detail: React.FC = () => {
   const [startTime, setStartTime] = useState(0);
   const [isSwitchingSource, setIsSwitchingSource] = useState(false);
   const [showSourceMenu, setShowSourceMenu] = useState(false);
+  const [bookmarked, setBookmarked] = useState(false);
+  const [heartAnimating, setHeartAnimating] = useState(false);
   const playbackTimeRef = useRef(0);
   const sourceMenuRef = useRef<HTMLDivElement>(null);
+  const infoRef = useRef<HTMLDivElement>(null);
 
+  const autoplay = searchParams.get('play') !== 'false';
   const sourceQuery = searchParams.get('source');
   const effectiveSource = (sourceQuery && availableSources.some(s => s.key === sourceQuery)) ? sourceQuery : sourceKey;
 
@@ -48,13 +53,32 @@ const Detail: React.FC = () => {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
+  // Scroll to details section if action=detail
+  useEffect(() => {
+    if (!loading && searchParams.get('action') === 'detail' && infoRef.current) {
+      const timer = setTimeout(() => {
+        infoRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 200);
+      return () => clearTimeout(timer);
+    }
+  }, [searchParams, loading]);
+
   useEffect(() => {
     const loadDetail = async () => {
       setLoading(true);
+      const startTime = Date.now();
+      const enforceMinDelay = async () => {
+        const elapsed = Date.now() - startTime;
+        if (elapsed < 750) {
+          await new Promise(resolve => setTimeout(resolve, 750 - elapsed));
+        }
+      };
+
       if (id) {
         const data = await fetchVideoDetail(effectiveSource, parseInt(id, 10));
         if (data) {
           setVideo(data);
+          setBookmarked(isBookmarked(data.vod_id, effectiveSource));
           // Parse episodes from vod_play_url
           if (data.vod_play_url) {
             const sources = data.vod_play_url.split('$$$');
@@ -79,6 +103,7 @@ const Detail: React.FC = () => {
           }
         }
       }
+      await enforceMinDelay();
       setLoading(false);
     };
     loadDetail();
@@ -194,6 +219,27 @@ const Detail: React.FC = () => {
     }
   };
 
+  const handleBookmarkToggle = () => {
+    if (!video) return;
+    
+    setHeartAnimating(true);
+    setTimeout(() => setHeartAnimating(false), 800);
+    
+    if (bookmarked) {
+      removeBookmark(video.vod_id, effectiveSource);
+      setBookmarked(false);
+    } else {
+      addBookmark({
+        vodId: video.vod_id,
+        vodName: video.vod_name,
+        vodPic: video.vod_pic,
+        typeName: video.type_name,
+        sourceKey: effectiveSource,
+      });
+      setBookmarked(true);
+    }
+  };
+
   if (loading) {
     return <div style={styles.message}>正在加载详情...</div>;
   }
@@ -250,54 +296,27 @@ const Detail: React.FC = () => {
       </div>
 
       <div style={styles.layout} className="detail-layout">
-        <div style={styles.mainCol} className="detail-main">
+        <div style={styles.playerWrapper} className="detail-player-col">
           {currentUrl ? (
-            <div style={styles.playerWrapper}>
-              <VideoPlayer
-                url={currentUrl}
-                startTime={startTime}
-                onTimeUpdate={handleTimeUpdate}
-                onEnded={handleVideoEnded}
-                videoName={video.vod_name}
-                episodeName={episodes[currentEpisodeIndex]?.name}
-                episodeIndex={currentEpisodeIndex}
-                episodeCount={episodes.length}
-                onPrevEpisode={handlePrevEpisode}
-                onNextEpisode={handleNextEpisode}
-              />
-            </div>
+            <VideoPlayer
+              url={currentUrl}
+              startTime={startTime}
+              onTimeUpdate={handleTimeUpdate}
+              onEnded={handleVideoEnded}
+              videoName={video.vod_name}
+              episodeName={episodes[currentEpisodeIndex]?.name}
+              episodeIndex={currentEpisodeIndex}
+              episodeCount={episodes.length}
+              onPrevEpisode={handlePrevEpisode}
+              onNextEpisode={handleNextEpisode}
+              autoPlay={autoplay}
+            />
           ) : (
             <div style={styles.noSource}>暂无可播放的片源</div>
           )}
-
-          {/* Video Info — inside mainCol, same width as player */}
-          <div style={styles.info} className="glass-panel">
-            <h1 style={styles.title}>{video.vod_name}</h1>
-            <div style={styles.metaRow}>
-              <span style={styles.tag}>{video.type_name}</span>
-              <span style={styles.tag}>{video.vod_area || '未知地区'}</span>
-              <span style={styles.tag}>{video.vod_year || '未知年份'}</span>
-            </div>
-            
-            {video.vod_director && (
-              <p style={styles.descText}><strong>导演：</strong> {video.vod_director}</p>
-            )}
-            {video.vod_actor && (
-              <p style={styles.descText}><strong>主演：</strong> {video.vod_actor}</p>
-            )}
-            
-            <div style={styles.desc}>
-              <h3 style={styles.descTitle}>剧情简介</h3>
-              <div 
-                style={styles.descText} 
-                dangerouslySetInnerHTML={{ __html: video.vod_content || '暂无简介' }} 
-              />
-            </div>
-          </div>
         </div>
 
-        <div style={styles.sideCol} className="glass-panel detail-episodes">
-
+        <div style={styles.sideCol} className="glass-panel detail-episodes-col">
           <div style={styles.epsHeader}>
             <h3 style={styles.epsTitle}>
               选集 <span style={styles.epsCount}>({episodes.length})</span>
@@ -337,6 +356,57 @@ const Detail: React.FC = () => {
             {episodes.length === 0 && (
               <div style={{ color: 'var(--text-muted)' }}>无选集信息</div>
             )}
+          </div>
+        </div>
+
+        {/* Video Info — direct child of layout grid, same column as player on desktop */}
+        <div ref={infoRef} style={styles.info} className="glass-panel detail-info-col">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+            <h1 style={{ ...styles.title, margin: 0 }}>{video.vod_name}</h1>
+            <button 
+              onClick={handleBookmarkToggle}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '8px 16px',
+                borderRadius: '20px',
+                border: '1px solid var(--border-color)',
+                backgroundColor: bookmarked ? 'rgba(var(--primary-rgb), 0.15)' : 'rgba(255,255,255,0.02)',
+                color: bookmarked ? 'var(--primary)' : 'var(--text-muted)',
+                transition: 'all 0.3s ease',
+                fontSize: '14px',
+                fontWeight: 600
+              }}
+              className={heartAnimating ? 'heart-beat' : ''}
+            >
+              <Heart 
+                size={18} 
+                fill={bookmarked ? 'var(--primary)' : 'none'} 
+                color={bookmarked ? 'var(--primary)' : 'currentColor'} 
+              />
+              {bookmarked ? '已收藏' : '加入收藏'}
+            </button>
+          </div>
+          <div style={styles.metaRow}>
+            <span style={styles.tag}>{video.type_name}</span>
+            <span style={styles.tag}>{video.vod_area || '未知地区'}</span>
+            <span style={styles.tag}>{video.vod_year || '未知年份'}</span>
+          </div>
+          
+          {video.vod_director && (
+            <p style={styles.descText}><strong>导演：</strong> {video.vod_director}</p>
+          )}
+          {video.vod_actor && (
+            <p style={styles.descText}><strong>主演：</strong> {video.vod_actor}</p>
+          )}
+          
+          <div style={styles.desc}>
+            <h3 style={styles.descTitle}>剧情简介</h3>
+            <div 
+              style={styles.descText} 
+              dangerouslySetInnerHTML={{ __html: video.vod_content || '暂无简介' }} 
+            />
           </div>
         </div>
       </div>
@@ -528,7 +598,11 @@ const styles = {
     paddingRight: '8px',
   },
   epBtn: {
-    padding: '8px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '38px',
+    padding: '0 8px',
     borderRadius: '8px',
     border: '1px solid var(--border-color)',
     fontSize: '13px',

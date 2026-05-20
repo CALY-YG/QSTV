@@ -17,7 +17,7 @@ const SourceContext = createContext<SourceContextType>({
 });
 
 export const SourceProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
 
   const availableSources = useMemo(() => {
     if (user) {
@@ -39,10 +39,11 @@ export const SourceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   // Ensure selected source is valid within available sources
   useEffect(() => {
+    if (loading) return; // Wait until auth state is fully initialized to avoid resetting on refresh
     if (!availableSources.some(s => s.key === sourceKey)) {
       setSourceKey(availableSources[0]?.key || 'dytt');
     }
-  }, [availableSources, sourceKey]);
+  }, [loading, availableSources, sourceKey]);
 
   const handleSetSource = (key: string) => {
     if (availableSources.some(s => s.key === key)) {

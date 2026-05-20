@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { fetchVideos, fetchVideosByTypes, fetchCategories, type Video, type Category } from '../api';
-import { Play } from 'lucide-react';
+import { Play, ChevronLeft, ChevronRight, Heart } from 'lucide-react';
 import { useSource } from '../context/SourceContext';
+import { getBookmarks, addBookmark, removeBookmark } from '../utils/bookmarks';
 
 const AREAS = [
   { label: '全部', value: '' },
@@ -33,6 +34,124 @@ const YEARS = [
   { label: '2016', value: '2016' },
   { label: '2015', value: '2015' },
 ];
+
+const cleanDescription = (content?: string) => {
+  if (!content) return '';
+  return content
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const getStableColorFromUrl = (url: string): string => {
+  let hash = 0;
+  for (let i = 0; i < url.length; i++) {
+    hash = url.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = Math.abs(hash % 360);
+  return `${hue}, 85%, 55%`;
+};
+
+const getDominantColor = (url: string): Promise<string> => {
+  return new Promise((resolve) => {
+    if (!url) {
+      resolve('210, 100%, 50%');
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    img.src = url;
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 16;
+        canvas.height = 16;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(getStableColorFromUrl(url));
+          return;
+        }
+        ctx.drawImage(img, 0, 0, 16, 16);
+        const imgData = ctx.getImageData(0, 0, 16, 16).data;
+        
+        let rSum = 0, gSum = 0, bSum = 0, count = 0;
+        for (let i = 0; i < imgData.length; i += 4) {
+          const r = imgData[i];
+          const g = imgData[i+1];
+          const b = imgData[i+2];
+          const a = imgData[i+3];
+          
+          if (a < 200) continue; // Skip transparent pixels
+          
+          // Skip pure gray/black/white
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          if (max - min < 25 && (max < 30 || max > 225)) continue;
+          
+          rSum += r;
+          gSum += g;
+          bSum += b;
+          count++;
+        }
+        
+        if (count === 0) {
+          // Fallback to simple average
+          for (let i = 0; i < imgData.length; i += 4) {
+            rSum += imgData[i];
+            gSum += imgData[i+1];
+            bSum += imgData[i+2];
+            count++;
+          }
+        }
+        
+        const r = Math.round(rSum / count);
+        const g = Math.round(gSum / count);
+        const b = Math.round(bSum / count);
+        
+        // Convert to HSL
+        const rNorm = r / 255;
+        const gNorm = g / 255;
+        const bNorm = b / 255;
+        const max = Math.max(rNorm, gNorm, bNorm);
+        const min = Math.min(rNorm, gNorm, bNorm);
+        let h = 0, s = 0, l = (max + min) / 2;
+
+        if (max !== min) {
+          const d = max - min;
+          s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+          switch (max) {
+            case rNorm: h = (gNorm - bNorm) / d + (gNorm < bNorm ? 6 : 0); break;
+            case gNorm: h = (bNorm - rNorm) / d + 2; break;
+            case bNorm: h = (rNorm - gNorm) / d + 4; break;
+          }
+          h /= 6;
+        }
+
+        // Clamp saturation and lightness to make sure the tag color is visible and premium
+        const hue = Math.round(h * 360);
+        let sat = Math.round(s * 100);
+        let light = Math.round(l * 100);
+        
+        if (sat < 40) sat = 75; // boost saturation if too gray
+        if (light < 30) light = 45; // boost lightness if too dark
+        if (light > 80) light = 60; // reduce lightness if too bright
+        
+        resolve(`${hue}, ${sat}%, ${light}%`);
+      } catch (e) {
+        resolve(getStableColorFromUrl(url));
+      }
+    };
+    img.onerror = () => {
+      resolve(getStableColorFromUrl(url));
+    };
+  });
+};
 
 const Home: React.FC = () => {
   const { sourceKey } = useSource();
@@ -73,6 +192,38 @@ const Home: React.FC = () => {
     }
   }, [typeId, parentId, keyword]);
 
+  // Load local bookmarks to track which ones are currently bookmarked
+  const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(new Set());
+
+  const refreshBookmarksState = () => {
+    const list = getBookmarks();
+    const currentSourceBookmarks = list.filter(b => b.sourceKey === sourceKey);
+    setBookmarkedIds(new Set(currentSourceBookmarks.map(b => String(b.vodId))));
+  };
+
+  useEffect(() => {
+    refreshBookmarksState();
+  }, [sourceKey]);
+
+  const handleBookmarkToggle = (video: Video, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const isCurrentlyBookmarked = bookmarkedIds.has(String(video.vod_id));
+    if (isCurrentlyBookmarked) {
+      removeBookmark(video.vod_id, sourceKey);
+    } else {
+      addBookmark({
+        vodId: video.vod_id,
+        vodName: video.vod_name,
+        vodPic: video.vod_pic,
+        typeName: video.type_name,
+        sourceKey: sourceKey,
+      });
+    }
+    refreshBookmarksState();
+  };
+
   const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
@@ -82,6 +233,14 @@ const Home: React.FC = () => {
       setLoading(true);
       setLoadingMore(false);
       setVideos([]);
+
+      const startTime = Date.now();
+      const enforceMinDelay = async () => {
+        const elapsed = Date.now() - startTime;
+        if (elapsed < 750) {
+          await new Promise(resolve => setTimeout(resolve, 750 - elapsed));
+        }
+      };
 
       if (parentId) {
         // Fetch from all sub-categories of this parent, since the API stores
@@ -97,11 +256,14 @@ const Home: React.FC = () => {
               setVideos(progress.list);
               setTotalPages(progress.pagecount);
               if (firstBatch) {
-                setLoading(false);
+                enforceMinDelay().then(() => {
+                  if (!cancelled) setLoading(false);
+                });
                 firstBatch = false;
               }
             }
           });
+          await enforceMinDelay();
           if (!cancelled) setLoading(false);
         } else {
           // Fallback: no sub-categories found yet, query directly
@@ -113,7 +275,8 @@ const Home: React.FC = () => {
             } else {
               setVideos([]);
             }
-            setLoading(false);
+            await enforceMinDelay();
+            if (!cancelled) setLoading(false);
           }
         }
       } else {
@@ -125,7 +288,8 @@ const Home: React.FC = () => {
           } else {
             setVideos([]);
           }
-          setLoading(false);
+          await enforceMinDelay();
+          if (!cancelled) setLoading(false);
         }
       }
     };
@@ -134,7 +298,7 @@ const Home: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
 
     return () => { cancelled = true; };
-  }, [page, typeId, parentId, keyword, year, area, sourceKey]);
+  }, [page, typeId, parentId, keyword, year, area, sourceKey, categories]);
 
   // Root categories (type_pid === 0)
   const rootCategories = useMemo(() => categories.filter(c => c.type_pid === 0), [categories]);
@@ -241,6 +405,91 @@ const Home: React.FC = () => {
     setSearchParams(params);
   };
 
+  // Carousel State for Featured Hero Banner
+  const [currentHeroIndex, setCurrentHeroIndex] = useState(0);
+
+  // Dynamically select 5 random featured videos whenever videos (or category) changes
+  const featuredVideos = useMemo(() => {
+    // Only show banner on first page when not searching
+    if (videos.length === 0 || keyword || page !== 1) return [];
+    // Shuffle a copy of the videos array and take up to 5 items
+    const shuffled = [...videos].sort(() => 0.5 - Math.random());
+    return shuffled.slice(0, Math.min(5, videos.length));
+  }, [videos, keyword, page]);
+
+  // Reset rotation index when the filter/category changes
+  useEffect(() => {
+    setCurrentHeroIndex(0);
+  }, [typeId, parentId, keyword, year, area, sourceKey]);
+
+  // Automatic slideshow rotation every 5 seconds (resets when index changes manually)
+  useEffect(() => {
+    if (featuredVideos.length <= 1) return;
+    const timer = setInterval(() => {
+      setCurrentHeroIndex((prev) => (prev + 1) % featuredVideos.length);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [featuredVideos.length, currentHeroIndex]);
+
+  const featuredVideo = featuredVideos[currentHeroIndex] || null;
+
+  // Touch Swipe Gestures for Hero Banner on Mobile
+  const touchStartX = React.useRef(0);
+  const touchEndX = React.useRef(0);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.targetTouches[0].clientX;
+    touchEndX.current = e.targetTouches[0].clientX; // initialize
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    touchEndX.current = e.targetTouches[0].clientX;
+  };
+
+  const handleTouchEnd = () => {
+    const diff = touchStartX.current - touchEndX.current;
+    if (Math.abs(diff) > 50) { // threshold of 50px
+      if (diff > 0) {
+        setCurrentHeroIndex((prev) => (prev + 1) % featuredVideos.length);
+      } else {
+        setCurrentHeroIndex((prev) => (prev - 1 + featuredVideos.length) % featuredVideos.length);
+      }
+    }
+  };
+
+  const [themeColorRaw, setThemeColorRaw] = useState('210, 100%, 50%');
+
+  useEffect(() => {
+    if (featuredVideo && featuredVideo.vod_pic) {
+      getDominantColor(featuredVideo.vod_pic).then((color) => {
+        setThemeColorRaw(color);
+      });
+    }
+  }, [featuredVideo]);
+
+  // Filter out ALL carousel featured movies from the grid catalog to avoid flickering or duplication
+  const displayVideos = useMemo(() => {
+    if (featuredVideos.length === 0) return videos;
+    const featuredIds = new Set(featuredVideos.map(v => v.vod_id));
+    return videos.filter(v => !featuredIds.has(v.vod_id));
+  }, [videos, featuredVideos]);
+
+  const activeStyle = {
+    background: 'linear-gradient(135deg, var(--primary) 0%, #00d2ff 100%)',
+    color: '#ffffff',
+    borderColor: 'transparent',
+    boxShadow: '0 4px 14px var(--primary-glow)',
+    fontWeight: 700,
+    cursor: 'pointer',
+  };
+
+  const inactiveStyle = {
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    color: 'var(--text-muted)',
+    borderColor: 'var(--border-color)',
+    cursor: 'pointer',
+  };
+
   return (
     <div className="container animate-fade-in" style={styles.page}>
       {!keyword && (
@@ -251,8 +500,7 @@ const Home: React.FC = () => {
               className="category-btn"
               style={{
                 ...styles.categoryBtn,
-                backgroundColor: (!typeId && !parentId) ? 'var(--primary)' : 'transparent',
-                color: (!typeId && !parentId) ? '#000' : 'var(--text-main)',
+                ...((!typeId && !parentId) ? activeStyle : inactiveStyle),
               }}
               onClick={handleAllClick}
             >
@@ -262,10 +510,9 @@ const Home: React.FC = () => {
               <button
                 key={cat.type_id}
                 className="category-btn"
-              style={{
+                style={{
                   ...styles.categoryBtn,
-                  backgroundColor: activeRootId === cat.type_id ? 'var(--primary)' : 'transparent',
-                  color: activeRootId === cat.type_id ? '#000' : 'var(--text-main)',
+                  ...(activeRootId === cat.type_id ? activeStyle : inactiveStyle),
                 }}
                 onClick={() => handleRootClick(cat.type_id)}
               >
@@ -285,8 +532,7 @@ const Home: React.FC = () => {
                     className="filter-btn"
                     style={{
                       ...styles.filterBtn,
-                      backgroundColor: (parentId && !typeId) ? 'var(--primary)' : 'transparent',
-                      color: (parentId && !typeId) ? '#000' : 'var(--text-main)',
+                      ...((parentId && !typeId) ? activeStyle : inactiveStyle),
                     }}
                     onClick={handleSubAllClick}
                   >
@@ -298,8 +544,7 @@ const Home: React.FC = () => {
                       className="filter-btn"
                       style={{
                         ...styles.filterBtn,
-                        backgroundColor: typeId === cat.type_id ? 'var(--primary)' : 'transparent',
-                        color: typeId === cat.type_id ? '#000' : 'var(--text-main)',
+                        ...(typeId === cat.type_id ? activeStyle : inactiveStyle),
                       }}
                       onClick={() => handleSubClick(cat.type_id)}
                     >
@@ -320,8 +565,7 @@ const Home: React.FC = () => {
                     className="filter-btn"
                     style={{
                       ...styles.filterBtn,
-                      backgroundColor: (area === a.value) || (!area && a.value === '') ? 'var(--primary)' : 'transparent',
-                      color: (area === a.value) || (!area && a.value === '') ? '#000' : 'var(--text-main)',
+                      ...(((area === a.value) || (!area && a.value === '')) ? activeStyle : inactiveStyle),
                     }}
                     onClick={() => handleFilterClick('area', a.value)}
                   >
@@ -341,8 +585,7 @@ const Home: React.FC = () => {
                     className="filter-btn"
                     style={{
                       ...styles.filterBtn,
-                      backgroundColor: (year === y.value) || (!year && y.value === '') ? 'var(--primary)' : 'transparent',
-                      color: (year === y.value) || (!year && y.value === '') ? '#000' : 'var(--text-main)',
+                      ...(((year === y.value) || (!year && y.value === '')) ? activeStyle : inactiveStyle),
                     }}
                     onClick={() => handleFilterClick('year', y.value)}
                   >
@@ -355,6 +598,148 @@ const Home: React.FC = () => {
         </div>
       )}
 
+      {featuredVideo && (
+        <div 
+          className="hero-banner" 
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          style={{ 
+            ...styles.heroBannerOverride, 
+            ['--theme-color-raw' as any]: themeColorRaw 
+          }}
+        >
+          {/* Transition wrapper keyed on video ID to fire smooth CSS fade-in on slide change */}
+          <div key={featuredVideo.vod_id} className="animate-fade-in" style={{ width: '100%', height: '100%', position: 'absolute', inset: 0 }}>
+            {/* Ambient blurred backdrop of the poster */}
+            <div 
+              className="hero-bg" 
+              style={{ 
+                backgroundImage: `url(${featuredVideo.vod_pic || ''})`,
+                filter: 'blur(55px) brightness(0.65) saturate(1.7)',
+                transform: 'scale(1.15)',
+                opacity: 0.95,
+                width: '100%',
+                height: '100%',
+                position: 'absolute',
+                inset: 0
+              }} 
+            />
+            {/* Frosted Glass Overlay */}
+            <div 
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'var(--hero-glass-overlay)',
+                backdropFilter: 'blur(20px)',
+                WebkitBackdropFilter: 'blur(20px)',
+              }}
+            />
+            {/* Left Vignette for readability */}
+            <div 
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'var(--hero-vignette)',
+                pointerEvents: 'none',
+              }}
+            />
+            
+            <div style={styles.heroLayout} className="hero-layout-row">
+              {/* Left Column: Movie Info Details */}
+              <div style={styles.heroLeft} className="hero-left-col">
+                <span className="hero-tag" style={styles.heroTagOverride}>{featuredVideo.type_name}</span>
+                <h1 className="hero-title" style={styles.heroTitleOverride}>{featuredVideo.vod_name}</h1>
+                <p className="hero-desc" style={styles.heroDescOverride}>
+                  {featuredVideo.vod_content 
+                    ? cleanDescription(featuredVideo.vod_content)
+                    : `${featuredVideo.vod_name}，最新高清影视资源在线观看。`
+                  }
+                </p>
+                <div style={{ display: 'flex', gap: '14px', alignItems: 'center', marginTop: '4px' }}>
+                  <Link to={`/play/${featuredVideo.vod_id}?play=true`} className="hero-play-btn" style={styles.heroPlayBtnOverride}>
+                    <Play size={16} fill="currentColor" />
+                    立即播放
+                  </Link>
+                  <Link to={`/play/${featuredVideo.vod_id}?play=false&action=detail`} className="hero-detail-btn" style={styles.heroDetailBtn}>
+                    查看详情
+                  </Link>
+                </div>
+              </div>
+              
+              {/* Right Column: Crisp vertical poster card in correct 2:3 aspect ratio */}
+              <div style={styles.heroRight} className="hero-right-poster-container">
+                <div style={styles.heroPosterCard} className="video-card">
+                  <img 
+                    src={featuredVideo.vod_pic} 
+                    alt={featuredVideo.vod_name} 
+                    style={styles.heroPosterImage}
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).style.display = 'none';
+                    }}
+                  />
+                  <div style={styles.heroPosterGlow} />
+
+                  {/* Floating Bookmark Button on Carousel Poster */}
+                  <button
+                    onClick={(e) => handleBookmarkToggle(featuredVideo, e)}
+                    className={`poster-bookmark-btn ${bookmarkedIds.has(String(featuredVideo.vod_id)) ? 'active' : ''}`}
+                    title={bookmarkedIds.has(String(featuredVideo.vod_id)) ? "取消收藏" : "收藏影视"}
+                  >
+                    <Heart
+                      size={16}
+                      fill={bookmarkedIds.has(String(featuredVideo.vod_id)) ? '#ff3b30' : 'none'}
+                      color={bookmarkedIds.has(String(featuredVideo.vod_id)) ? '#ff3b30' : 'rgba(255, 255, 255, 0.85)'}
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Left Arrow Button */}
+          {featuredVideos.length > 1 && (
+            <button
+              onClick={() => setCurrentHeroIndex((prev) => (prev - 1 + featuredVideos.length) % featuredVideos.length)}
+              className="hero-arrow-btn hero-arrow-left"
+              aria-label="Previous Slide"
+            >
+              <ChevronLeft size={40} />
+            </button>
+          )}
+
+          {/* Right Arrow Button */}
+          {featuredVideos.length > 1 && (
+            <button
+              onClick={() => setCurrentHeroIndex((prev) => (prev + 1) % featuredVideos.length)}
+              className="hero-arrow-btn hero-arrow-right"
+              aria-label="Next Slide"
+            >
+              <ChevronRight size={40} />
+            </button>
+          )}
+
+          {/* Glassy Slide Indicator Dots */}
+          {featuredVideos.length > 1 && (
+            <div style={styles.indicatorWrap} className="hero-indicator-dots">
+              {featuredVideos.map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setCurrentHeroIndex(idx)}
+                  style={{
+                    ...styles.indicatorDot,
+                    backgroundColor: idx === currentHeroIndex ? '#ffffff' : 'rgba(255, 255, 255, 0.35)',
+                    boxShadow: idx === currentHeroIndex ? '0 0 10px rgba(255, 255, 255, 0.6)' : 'none',
+                    width: idx === currentHeroIndex ? '20px' : '8px',
+                  }}
+                  title={`切换至第 ${idx + 1} 张`}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {keyword && (
         <h2 style={styles.searchTitle}>
           搜索结果: <span className="text-gradient">{keyword}</span>
@@ -362,7 +747,15 @@ const Home: React.FC = () => {
       )}
 
       {loading ? (
-        <div style={styles.loading}>正在加载影视资源...</div>
+        <div className="skeleton-grid">
+          {Array.from({ length: 12 }).map((_, i) => (
+            <div key={i} className="skeleton-card">
+              <div className="skeleton-poster" />
+              <div className="skeleton-title" />
+              <div className="skeleton-tag" />
+            </div>
+          ))}
+        </div>
       ) : (
         <>
           {loadingMore && (
@@ -372,9 +765,9 @@ const Home: React.FC = () => {
             </div>
           )}
           <div className="video-grid" style={styles.grid}>
-            {videos.map(video => (
+            {displayVideos.map(video => (
               <Link to={`/play/${video.vod_id}`} key={video.vod_id} style={styles.card} className="video-card">
-                <div style={styles.posterWrapper}>
+                <div style={styles.posterWrapper} className="poster-wrapper">
                   {video.vod_pic ? (
                     <img
                       src={video.vod_pic}
@@ -394,6 +787,19 @@ const Home: React.FC = () => {
                     <Play size={48} color="#fff" />
                   </div>
                   <div style={styles.remarks}>{video.vod_remarks || video.vod_time.split(' ')[0]}</div>
+
+                  {/* Floating Bookmark Button */}
+                  <button
+                    onClick={(e) => handleBookmarkToggle(video, e)}
+                    className={`poster-bookmark-btn ${bookmarkedIds.has(String(video.vod_id)) ? 'active' : ''}`}
+                    title={bookmarkedIds.has(String(video.vod_id)) ? "取消收藏" : "收藏影视"}
+                  >
+                    <Heart
+                      size={16}
+                      fill={bookmarkedIds.has(String(video.vod_id)) ? '#ff3b30' : 'none'}
+                      color={bookmarkedIds.has(String(video.vod_id)) ? '#ff3b30' : 'rgba(255, 255, 255, 0.85)'}
+                    />
+                  </button>
                 </div>
                 <div style={styles.cardContent}>
                   <h3 style={styles.title}>{video.vod_name}</h3>
@@ -403,12 +809,12 @@ const Home: React.FC = () => {
                 </div>
               </Link>
             ))}
-            {videos.length === 0 && (
+            {displayVideos.length === 0 && (
               <div style={styles.empty}>暂无数据</div>
             )}
           </div>
 
-          {videos.length > 0 && (
+          {displayVideos.length > 0 && (
             <div style={styles.pagination}>
               <button
                 style={{ ...styles.pageBtn, opacity: page <= 1 ? 0.5 : 1 }}
@@ -540,7 +946,7 @@ const styles = {
     border: '2px solid var(--border-color)',
     borderTop: '2px solid var(--primary)',
     borderRadius: '50%',
-    animation: 'spin 0.8s linear infinite',
+    animation: 'spin 1.4s linear infinite',
   },
   grid: {
     display: 'grid',
@@ -647,6 +1053,145 @@ const styles = {
   pageInfo: {
     color: 'var(--text-muted)',
     fontSize: '14px',
+  },
+  heroBannerOverride: {
+    position: 'relative' as const,
+    width: '100%',
+    height: '420px',
+    borderRadius: '24px',
+    overflow: 'hidden',
+    marginBottom: '36px',
+    boxShadow: 'var(--hero-banner-shadow)',
+    border: '1px solid var(--hero-banner-border)',
+    background: 'var(--hero-banner-bg)',
+  },
+  heroOverlayOverride: {
+    position: 'absolute' as const,
+    inset: 0,
+    background: 'linear-gradient(to right, rgba(6, 9, 19, 0.95) 0%, rgba(6, 9, 19, 0.75) 45%, rgba(6, 9, 19, 0.2) 75%, rgba(6, 9, 19, 0.6) 100%), linear-gradient(to top, rgba(6, 9, 19, 1) 0%, rgba(6, 9, 19, 0.1) 60%, transparent 100%)',
+  },
+  heroLayout: {
+    position: 'absolute' as const,
+    inset: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: '0 48px',
+    zIndex: 10,
+    gap: '40px',
+  },
+  heroLeft: {
+    flex: '1 1 50%',
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '16px',
+    zIndex: 12,
+  },
+  heroTagOverride: {
+    background: 'rgba(255, 255, 255, 0.08)',
+    backdropFilter: 'blur(8px)',
+    WebkitBackdropFilter: 'blur(8px)',
+    border: '1px solid rgba(255, 255, 255, 0.12)',
+    color: '#fff',
+    padding: '6px 14px',
+    borderRadius: '20px',
+    fontSize: '12px',
+    fontWeight: 700,
+    width: 'fit-content',
+    letterSpacing: '1px',
+  },
+  heroTitleOverride: {
+    fontSize: '42px',
+    fontWeight: 800,
+    lineHeight: 1.25,
+    color: 'var(--hero-text-title)',
+    textShadow: '0 2px 10px rgba(0, 0, 0, 0.25)',
+  },
+  heroDescOverride: {
+    fontSize: '15px',
+    color: 'var(--hero-text-desc)',
+    lineHeight: '1.7',
+    textShadow: '0 1px 4px rgba(0, 0, 0, 0.2)',
+    display: '-webkit-box',
+    WebkitLineClamp: 3,
+    WebkitBoxOrient: 'vertical' as const,
+    overflow: 'hidden',
+    maxHeight: '76px',
+  },
+  heroPlayBtnOverride: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    background: 'var(--hero-play-bg)',
+    color: 'var(--hero-play-color)',
+    padding: '12px 28px',
+    borderRadius: '24px',
+    fontWeight: 700,
+    fontSize: '15px',
+    transition: 'all 0.3s ease',
+    width: 'fit-content',
+    boxShadow: '0 10px 20px rgba(0,0,0,0.15)',
+  },
+  heroDetailBtn: {
+    display: 'flex',
+    alignItems: 'center',
+    background: 'var(--hero-detail-bg)',
+    border: '1px solid var(--hero-detail-border)',
+    color: 'var(--hero-detail-color)',
+    padding: '11px 26px',
+    borderRadius: '24px',
+    fontWeight: 600,
+    fontSize: '15px',
+    transition: 'all 0.3s ease',
+    width: 'fit-content',
+    backdropFilter: 'blur(8px)',
+  },
+  heroRight: {
+    flex: '0 0 270px',
+    height: '370px',
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 12,
+  },
+  heroPosterCard: {
+    position: 'relative' as const,
+    width: '252px',
+    height: '360px',
+    borderRadius: '16px',
+    overflow: 'hidden',
+    boxShadow: '0 20px 45px rgba(0, 0, 0, 0.4)',
+    border: '1px solid var(--border-color)',
+    background: 'var(--card-bg)',
+    transition: 'all 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+  },
+  heroPosterImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'cover' as const,
+    display: 'block',
+  },
+  heroPosterGlow: {
+    position: 'absolute' as const,
+    inset: 0,
+    background: 'linear-gradient(135deg, rgba(255,255,255,0.15) 0%, transparent 60%)',
+    pointerEvents: 'none' as const,
+  },
+  indicatorWrap: {
+    position: 'absolute' as const,
+    bottom: '20px',
+    left: '48px',
+    display: 'flex',
+    gap: '6px',
+    zIndex: 15,
+  },
+  indicatorDot: {
+    height: '8px',
+    borderRadius: '4px',
+    border: 'none',
+    cursor: 'pointer',
+    padding: 0,
+    transition: 'all 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
   }
 };
 

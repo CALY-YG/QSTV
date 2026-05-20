@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthContext';
 import { login, register } from '../utils/auth';
 import { forceSyncWithCloud } from '../utils/history';
+import { forceSyncBookmarksWithCloud } from '../utils/bookmarks';
 import { LogIn, UserPlus, X } from 'lucide-react';
+
 
 interface AuthModalProps {
   onClose: () => void;
@@ -32,6 +34,7 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
       setUsername('');
       setPassword('');
       await forceSyncWithCloud();
+      await forceSyncBookmarksWithCloud();
       onClose(); // Close modal on success
     } catch (err: any) {
       setAuthError(err.message || '操作失败');
